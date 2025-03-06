@@ -2,6 +2,9 @@ import anyio
 import click
 import httpx
 import asyncio
+import uuid
+import time
+from datetime import datetime
 from langchain_openai import ChatOpenAI
 from browser_use import Agent
 from browser_use.browser.browser import Browser, BrowserConfig
@@ -37,6 +40,9 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
 
 # Flag to track browser context health
 browser_context_healthy = True
+
+# Task storage for async operations
+task_store = {}
 
 
 async def reset_browser_context():
@@ -205,6 +211,139 @@ async def browser_use(
             browser_context_healthy = False
 
 
+async def run_browser_task_async(task_id, url, action):
+    """Run a browser task asynchronously and store the result."""
+    try:
+        # Update task status to running
+        task_store[task_id]["status"] = "running"
+        task_store[task_id]["start_time"] = datetime.now().isoformat()
+        task_store[task_id]["progress"] = {
+            "current_step": 0,
+            "total_steps": 0,
+            "steps": [],
+        }
+
+        # Check browser health
+        if not await check_browser_health():
+            task_store[task_id]["status"] = "failed"
+            task_store[task_id]["end_time"] = datetime.now().isoformat()
+            task_store[task_id][
+                "error"
+            ] = "Browser context is unhealthy and could not be reset"
+            return
+
+        # Define step callback function with the correct signature
+        async def step_callback(browser_state, agent_output, step_number):
+            # Update progress in task store
+            task_store[task_id]["progress"]["current_step"] = step_number
+            task_store[task_id]["progress"]["total_steps"] = max(
+                task_store[task_id]["progress"]["total_steps"], step_number
+            )
+
+            # Add step info
+            step_info = {"step": step_number, "time": datetime.now().isoformat()}
+
+            # Add goal if available
+            if agent_output and hasattr(agent_output, "current_state"):
+                if hasattr(agent_output.current_state, "next_goal"):
+                    step_info["goal"] = agent_output.current_state.next_goal
+
+            task_store[task_id]["progress"]["steps"].append(step_info)
+
+            # Log progress
+            logger.info(f"Task {task_id}: Step {step_number} completed")
+
+        # Define done callback function with the correct signature
+        async def done_callback(history):
+            # Log completion
+            logger.info(f"Task {task_id}: Completed with {len(history.history)} steps")
+
+            # Add final step
+            current_step = task_store[task_id]["progress"]["current_step"] + 1
+            task_store[task_id]["progress"]["steps"].append(
+                {
+                    "step": current_step,
+                    "time": datetime.now().isoformat(),
+                    "status": "completed",
+                }
+            )
+
+        # Use the existing browser context with callbacks
+        agent = Agent(
+            task=action,
+            llm=llm,
+            browser_context=context,
+            register_new_step_callback=step_callback,
+            register_done_callback=done_callback,
+        )
+
+        # Run the agent
+        ret = await agent.run(max_steps=10)
+
+        # Get the final result
+        final_result = ret.final_result()
+
+        # Check if we have a valid result
+        if final_result and hasattr(final_result, "raise_for_status"):
+            final_result.raise_for_status()
+            result_text = str(final_result.text)
+        else:
+            result_text = (
+                str(final_result) if final_result else "No final result available"
+            )
+
+        # Gather essential information from the agent history
+        is_successful = ret.is_successful()
+        has_errors = ret.has_errors()
+        errors = ret.errors()
+        urls_visited = ret.urls()
+        action_names = ret.action_names()
+        extracted_content = ret.extracted_content()
+        steps_taken = ret.number_of_steps()
+
+        # Create a focused response with the most relevant information for an LLM
+        response_data = {
+            "final_result": result_text,
+            "success": is_successful,
+            "has_errors": has_errors,
+            "errors": [str(err) for err in errors if err],
+            "urls_visited": [str(url) for url in urls_visited if url],
+            "actions_performed": action_names,
+            "extracted_content": extracted_content,
+            "steps_taken": steps_taken,
+        }
+
+        # Store the result
+        task_store[task_id]["status"] = "completed"
+        task_store[task_id]["end_time"] = datetime.now().isoformat()
+        task_store[task_id]["result"] = response_data
+
+    except Exception as e:
+        logger.error(f"Error in async browser task: {str(e)}")
+        import traceback
+
+        tb = traceback.format_exc()
+
+        # Mark the browser context as unhealthy
+        global browser_context_healthy
+        browser_context_healthy = False
+
+        # Store the error
+        task_store[task_id]["status"] = "failed"
+        task_store[task_id]["end_time"] = datetime.now().isoformat()
+        task_store[task_id]["error"] = str(e)
+        task_store[task_id]["traceback"] = tb
+
+    finally:
+        # Always try to reset the browser context to a clean state after use
+        try:
+            current_page = await context.get_current_page()
+            await current_page.goto("about:blank")
+        except Exception as e:
+            logger.warning(f"Error resetting page state: {str(e)}")
+            browser_context_healthy = False
+
+
 @click.command()
 @click.option("--port", default=8000, help="Port to listen on for SSE")
 @click.option(
@@ -228,91 +367,195 @@ def main(port: int, transport: str, timeout: int) -> int:
     ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
         global browser_context_healthy
 
-        if name != "browser_use":
-            raise ValueError(f"Unknown tool: {name}")
-        if "url" not in arguments:
-            raise ValueError("Missing required argument 'url'")
-        if "action" not in arguments:
-            raise ValueError("Missing required argument 'action'")
+        # Handle different tool types
+        if name == "browser_use":
+            # Check required arguments
+            if "url" not in arguments:
+                raise ValueError("Missing required argument 'url'")
+            if "action" not in arguments:
+                raise ValueError("Missing required argument 'action'")
 
-        # Create a task for the browser_use function
-        browser_task = None
+            # Get optional wait parameter (default: false for async behavior)
+            wait = arguments.get("wait", False)
 
-        try:
-            # Create a task for the browser_use function
-            browser_task = asyncio.create_task(
-                browser_use(arguments["url"], arguments["action"])
+            # Generate a task ID
+            task_id = str(uuid.uuid4())
+
+            # Initialize task in store
+            task_store[task_id] = {
+                "id": task_id,
+                "status": "pending",
+                "url": arguments["url"],
+                "action": arguments["action"],
+                "created_at": datetime.now().isoformat(),
+            }
+
+            # Start task in background
+            task = asyncio.create_task(
+                run_browser_task_async(task_id, arguments["url"], arguments["action"])
             )
 
-            # Wait for the task to complete with a timeout
-            try:
-                result = await asyncio.wait_for(browser_task, timeout=timeout)
-                return result
-            except asyncio.TimeoutError:
-                # Cancel the task if it times out
-                if browser_task and not browser_task.done():
-                    browser_task.cancel()
+            if wait:
+                # Wait for task to complete (with timeout)
+                try:
+                    await asyncio.wait_for(
+                        # Create a task that waits for the browser task to complete
+                        asyncio.create_task(wait_for_task_completion(task_id, timeout)),
+                        timeout=timeout,
+                    )
 
-                # Mark the browser context as unhealthy
-                browser_context_healthy = False
+                    # Check if task completed successfully
+                    if (
+                        task_store[task_id]["status"] == "completed"
+                        and "result" in task_store[task_id]
+                    ):
+                        # Return the completed task result
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=json.dumps(
+                                    task_store[task_id]["result"], indent=2
+                                ),
+                            )
+                        ]
+                    else:
+                        # Task failed
+                        error_message = {
+                            "final_result": f"Task failed: {task_store[task_id].get('error', 'Unknown error')}",
+                            "success": False,
+                            "has_errors": True,
+                            "errors": [
+                                task_store[task_id].get("error", "Unknown error")
+                            ],
+                            "task_id": task_id,
+                        }
+                        return [
+                            types.TextContent(
+                                type="text", text=json.dumps(error_message, indent=2)
+                            )
+                        ]
 
-                # Schedule a reset of the browser context
-                asyncio.create_task(reset_browser_context())
+                except asyncio.TimeoutError:
+                    # Cancel the task if it times out
+                    if not task.done():
+                        task.cancel()
 
-                # Return a meaningful error message if the operation times out
-                error_message = {
-                    "final_result": "Operation timed out",
-                    "success": False,
-                    "has_errors": True,
-                    "errors": [
-                        f"The operation exceeded the {timeout} second timeout limit"
-                    ],
-                    "urls_visited": [],
-                    "actions_performed": [],
-                    "extracted_content": [],
-                    "steps_taken": 0,
-                }
+                    # Mark the browser context as unhealthy
+                    browser_context_healthy = False
+
+                    # Schedule a reset of the browser context
+                    asyncio.create_task(reset_browser_context())
+
+                    # Return a meaningful error message if the operation times out
+                    error_message = {
+                        "final_result": "Operation timed out",
+                        "success": False,
+                        "has_errors": True,
+                        "errors": [
+                            f"The operation exceeded the {timeout} second timeout limit"
+                        ],
+                        "urls_visited": [],
+                        "actions_performed": [],
+                        "extracted_content": [],
+                        "steps_taken": 0,
+                        "task_id": task_id,
+                    }
+
+                    # Update task status
+                    task_store[task_id]["status"] = "failed"
+                    task_store[task_id][
+                        "error"
+                    ] = f"The operation exceeded the {timeout} second timeout limit"
+                    task_store[task_id]["end_time"] = datetime.now().isoformat()
+
+                    return [
+                        types.TextContent(
+                            type="text", text=json.dumps(error_message, indent=2)
+                        )
+                    ]
+                except Exception as e:
+                    # Handle other exceptions
+                    import traceback
+
+                    tb = traceback.format_exc()
+
+                    # Mark the browser context as unhealthy
+                    browser_context_healthy = False
+
+                    # Schedule a reset of the browser context
+                    asyncio.create_task(reset_browser_context())
+
+                    # Update task status
+                    task_store[task_id]["status"] = "failed"
+                    task_store[task_id]["error"] = str(e)
+                    task_store[task_id]["traceback"] = tb
+                    task_store[task_id]["end_time"] = datetime.now().isoformat()
+
+                    error_message = {
+                        "final_result": f"Error: {str(e)}",
+                        "success": False,
+                        "has_errors": True,
+                        "errors": [str(e), tb],
+                        "urls_visited": [],
+                        "actions_performed": [],
+                        "extracted_content": [],
+                        "steps_taken": 0,
+                        "task_id": task_id,
+                    }
+                    return [
+                        types.TextContent(
+                            type="text", text=json.dumps(error_message, indent=2)
+                        )
+                    ]
+            else:
+                # Return task ID immediately (async behavior)
                 return [
                     types.TextContent(
-                        type="text", text=json.dumps(error_message, indent=2)
+                        type="text",
+                        text=json.dumps(
+                            {
+                                "task_id": task_id,
+                                "status": "pending",
+                                "message": "Task started. Use browser_get_result to check status and results.",
+                            },
+                            indent=2,
+                        ),
                     )
                 ]
-        except Exception as e:
-            # Cancel the task if it's still running
-            if browser_task and not browser_task.done():
-                browser_task.cancel()
 
-            # Handle other exceptions gracefully
-            import traceback
+        elif name == "browser_get_result":
+            # Get result of async task
+            if "task_id" not in arguments:
+                raise ValueError("Missing required argument 'task_id'")
 
-            tb = traceback.format_exc()
+            task_id = arguments["task_id"]
 
-            # Mark the browser context as unhealthy
-            browser_context_healthy = False
+            if task_id not in task_store:
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=json.dumps(
+                            {"error": "Task not found", "task_id": task_id}, indent=2
+                        ),
+                    )
+                ]
 
-            # Schedule a reset of the browser context
-            asyncio.create_task(reset_browser_context())
-
-            error_message = {
-                "final_result": f"Error: {str(e)}",
-                "success": False,
-                "has_errors": True,
-                "errors": [str(e), tb],
-                "urls_visited": [],
-                "actions_performed": [],
-                "extracted_content": [],
-                "steps_taken": 0,
-            }
+            # Return current task status and result if available
             return [
-                types.TextContent(type="text", text=json.dumps(error_message, indent=2))
+                types.TextContent(
+                    type="text", text=json.dumps(task_store[task_id], indent=2)
+                )
             ]
+
+        else:
+            raise ValueError(f"Unknown tool: {name}")
 
     @app.list_tools()
     async def list_tools() -> list[types.Tool]:
         return [
             types.Tool(
                 name="browser_use",
-                description="takes a prompt representing an action to perform in the browser and returns detailed information about the execution",
+                description="Performs a browser action and returns the result or a task ID for async execution",
                 inputSchema={
                     "type": "object",
                     "required": ["url", "action"],
@@ -325,18 +568,31 @@ def main(port: int, transport: str, timeout: int) -> int:
                             "type": "string",
                             "description": "Action to perform in the browser",
                         },
+                        "wait": {
+                            "type": "boolean",
+                            "description": "Whether to wait for the task to complete (default: false)",
+                            "default": False,
+                        },
                     },
                 },
                 outputSchema={
                     "type": "object",
                     "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "ID of the task (returned when wait=false)",
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Status of the task (pending, running, completed, failed)",
+                        },
                         "final_result": {
                             "type": "string",
-                            "description": "The final result of the browser action",
+                            "description": "The final result of the browser action (returned when wait=true)",
                         },
                         "success": {
                             "type": "boolean",
-                            "description": "Whether the action was successful",
+                            "description": "Whether the action was successful (returned when wait=true)",
                         },
                         "has_errors": {
                             "type": "boolean",
@@ -368,6 +624,87 @@ def main(port: int, transport: str, timeout: int) -> int:
                         },
                     },
                 },
+            ),
+            types.Tool(
+                name="browser_get_result",
+                description="Gets the result of an asynchronous browser task",
+                inputSchema={
+                    "type": "object",
+                    "required": ["task_id"],
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "ID of the task to get results for",
+                        },
+                    },
+                },
+                outputSchema={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "ID of the task",
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Status of the task (pending, running, completed, failed)",
+                        },
+                        "result": {
+                            "type": "object",
+                            "description": "Result of the task if completed",
+                        },
+                        "progress": {
+                            "type": "object",
+                            "description": "Progress information for the task",
+                        },
+                    },
+                },
+            ),
+        ]
+
+    @app.list_resources()
+    async def list_resources() -> list[types.Resource]:
+        # List all completed tasks as resources
+        resources = []
+        for task_id, task in task_store.items():
+            if task["status"] in ["completed", "failed"]:
+                resources.append(
+                    types.Resource(
+                        uri=f"resource://browser_task/{task_id}",
+                        name=f"Browser Task: {task['action'][:30]}...",
+                        mimeType="application/json",
+                    )
+                )
+        return resources
+
+    @app.read_resource()
+    async def read_resource(uri: str) -> list[types.ResourceContents]:
+        # Extract task ID from URI
+        if uri.startswith("resource://browser_task/"):
+            task_id = uri.split("/")[-1]
+
+            if task_id in task_store:
+                return [
+                    types.ResourceContents(
+                        uri=uri,
+                        mimeType="application/json",
+                        text=json.dumps(task_store[task_id], indent=2),
+                    )
+                ]
+            else:
+                return [
+                    types.ResourceContents(
+                        uri=uri,
+                        mimeType="application/json",
+                        text=json.dumps({"error": "Resource not found"}, indent=2),
+                    )
+                ]
+
+        return [
+            types.ResourceContents(
+                uri=uri,
+                mimeType="application/json",
+                text=json.dumps({"error": "Invalid resource URI"}, indent=2),
             )
         ]
 
@@ -452,3 +789,33 @@ def main(port: int, transport: str, timeout: int) -> int:
         anyio.run(arun)
 
     return 0
+
+
+async def wait_for_task_completion(task_id, timeout_seconds=120):
+    """Wait for a task to complete with timeout and error handling."""
+    start_time = time.time()
+    check_interval = 0.5  # seconds between checks
+
+    while True:
+        # Check if task exists
+        if task_id not in task_store:
+            raise ValueError(f"Task {task_id} not found")
+
+        # Check task status
+        status = task_store[task_id]["status"]
+        if status in ["completed", "failed"]:
+            return
+
+        # Check for timeout
+        elapsed_time = time.time() - start_time
+        if elapsed_time > timeout_seconds:
+            raise asyncio.TimeoutError(
+                f"Waiting for task {task_id} timed out after {timeout_seconds} seconds"
+            )
+
+        # Wait before checking again
+        await asyncio.sleep(check_interval)
+
+        # Gradually increase check interval for longer-running tasks
+        # but cap it at 2 seconds to maintain responsiveness
+        check_interval = min(check_interval * 1.2, 2.0)
