@@ -1,6 +1,6 @@
-# browser-use mcp server
+# ➡️ browser-use mcp server 
 
-browser-use MCP Server with SSE transport
+[browser-use](https://github.com/browser-use/browser-use) MCP Server with SSE transport
 
 ### requirements
 
@@ -13,9 +13,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### quickstart
 
 ```
+uv sync
 uv pip install playwright
 uv run playwright install --with-deps --no-shell chromium
-uv sync
 uv run server --transport sse --port 8000 &
 uv run client
 ```
@@ -54,4 +54,8 @@ windows
 then try asking your LLM the following:
 
 ```open https://news.ycombinator.com and return the top ranked article```
+
+### help
+
+for issues or interest reach out @ https://cobrowser.xyz
 
