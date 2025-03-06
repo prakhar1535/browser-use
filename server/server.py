@@ -3,10 +3,25 @@ import click
 import httpx
 import asyncio
 from langchain_openai import ChatOpenAI
-from browser_use import Agent
+from browser_use import Agent, Browser
 import mcp.types as types
 from mcp.server.lowlevel import Server
 from dotenv import load_dotenv
+from browser_use.browser.context import BrowserContextConfig, BrowserContext
+
+config = BrowserContextConfig(
+    wait_for_network_idle_page_load_time=0.6,
+    maximum_wait_page_load_time=1.2,
+    minimum_wait_page_load_time=0.2,
+    browser_window_size={'width': 1280, 'height': 1100},
+    locale='en-US',
+    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
+    highlight_elements=True,
+    viewport_expansion=500,
+)
+
+browser = Browser()
+context = BrowserContext(browser=browser, config=config)
 
 llm = ChatOpenAI(model='gpt-4o', temperature=0.0)
 planner_llm = ChatOpenAI(
@@ -20,7 +35,7 @@ async def browser_use(
     headers = {
         "User-Agent": "browser-use (github.com/co-browser/browser-use-mcp-server)",
     }
-    agent = Agent(task=action, llm=llm, planner_llm=planner_llm, use_vision_for_planner=False, planner_interval=1)
+    agent = Agent(task=action, llm=llm, browser_context=context)
     ret = await agent.run()
     response = ret.final_result()
     return [types.TextContent(type="text", text=response)]
