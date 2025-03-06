@@ -20,12 +20,11 @@ async def browser_use(
     headers = {
         "User-Agent": "browser-use (github.com/co-browser/browser-use-mcp-server)",
     }
-    async with httpx.AsyncClient(follow_redirects=True, headers=headers) as client:
-        agent = Agent(task=action, llm=llm, planner_llm=planner_llm, use_vision_for_planner=False, planner_interval=1)
-        ret = await agent.run()
-        response = ret
-        response.raise_for_status()
-        return [types.TextContent(type="text", text=response.text)]
+    agent = Agent(task=action, llm=llm, planner_llm=planner_llm, use_vision_for_planner=False, planner_interval=1)
+    ret = await agent.run()
+    response = ret.final_result()
+    response.raise_for_status()
+    return [types.TextContent(type="text", text=response.text)]
 
 
 @click.command()
@@ -49,7 +48,7 @@ def main(port: int, transport: str) -> int:
             raise ValueError("Missing required argument 'url'")
         if "action" not in arguments:
             raise ValueError("Missing required argument 'action'")
-        return await browser_use(arguments["url", "action"])
+        return await browser_use(arguments["url"], arguments["action"])
 
     @app.list_tools()
     async def list_tools() -> list[types.Tool]:
