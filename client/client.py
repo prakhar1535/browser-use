@@ -18,7 +18,7 @@ logging.basicConfig(
 
 async def main():
     async with sse_client(
-        url = "http://localhost:8001/sse",
+        url = "http://localhost:8000/sse",
     ) as streams:
         async with ClientSession(*streams) as session:
             await session.initialize()
