@@ -13,9 +13,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### quickstart
 
 ```
+uv sync
 uv pip install playwright
 uv run playwright install --with-deps --no-shell chromium
-uv sync
 uv run server --transport sse --port 8000 &
 uv run client
 ```
