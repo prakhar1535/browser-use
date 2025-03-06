@@ -1,8 +1,6 @@
-# 💫 browser-use mcp server 💫
+# ➡️ browser-use mcp server 
 
 browser-use MCP Server with SSE transport
-
-https://cobrowser.xyz
 
 ### requirements
 
@@ -34,4 +32,8 @@ uv run client
 after running the server, add http://localhost:8000/sse to your client, then try asking your LLM the following:
 
 ```open https://news.ycombinator.com and return the top ranked article```
+
+### help
+
+for issues or interest reach out @ https://cobrowser.xyz
 
