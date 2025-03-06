@@ -34,7 +34,7 @@ after running the server, add http://localhost:8000/sse to your client UI, or in
 ```json
 {
   "mcpServers": {
-    "browser-use-mcp=server": {
+    "browser-use-mcp-server": {
       "url": "http://localhost:8000/sse"
     }
   }
