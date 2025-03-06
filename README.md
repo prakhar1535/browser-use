@@ -24,7 +24,7 @@ uv run server --transport sse --port 8000
 - cursor.ai
 - claude desktop
 - claude code
-- windsurf
+- <s>windsurf</s> ([windsurf](https://codeium.com/windsurf) doesn't support SSE yet)
 
 ### usage
 
