@@ -1,6 +1,6 @@
 # ➡️ browser-use mcp server 
 
-browser-use MCP Server with SSE transport
+[browser-use](https://github.com/browser-use/browser-use) MCP Server with SSE transport
 
 ### requirements
 
