@@ -106,6 +106,9 @@ async def run_browser_task_async(task_id, url, action):
             "steps": [],
         }
 
+        # Reset browser context to ensure a clean state
+        await reset_browser_context()
+
         # Check browser health
         if not await check_browser_health():
             task_store[task_id]["status"] = "failed"
@@ -154,7 +157,7 @@ async def run_browser_task_async(task_id, url, action):
 
         # Use the existing browser context with callbacks
         agent = Agent(
-            task=action,
+            task=f"First, navigate to {url}. Then, {action}",
             llm=llm,
             browser_context=context,
             register_new_step_callback=step_callback,
