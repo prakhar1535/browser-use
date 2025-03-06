@@ -1,6 +1,8 @@
-# browser-use mcp server
+# 💫 browser-use mcp server 💫
 
 browser-use MCP Server with SSE transport
+
+https://cobrowser.xyz
 
 ### requirements
 
