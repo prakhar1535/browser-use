@@ -17,7 +17,7 @@ config = BrowserContextConfig(
     locale='en-US',
     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
     highlight_elements=True,
-    viewport_expansion=500,
+    viewport_expansion=0,
 )
 
 browser = Browser()
