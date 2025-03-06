@@ -23,8 +23,7 @@ async def browser_use(
     agent = Agent(task=action, llm=llm, planner_llm=planner_llm, use_vision_for_planner=False, planner_interval=1)
     ret = await agent.run()
     response = ret.final_result()
-    response.raise_for_status()
-    return [types.TextContent(type="text", text=response.text)]
+    return [types.TextContent(type="text", text=response)]
 
 
 @click.command()
