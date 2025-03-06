@@ -27,7 +27,7 @@ async def main():
             tools = await session.list_tools()
             print(tools)
 
-            # Call the fetch tool
+            # Call the browser_use tool
             result = await session.call_tool("browser_use", {"url": "https://example.com", "action": "save the title"})
             print(result)
 
