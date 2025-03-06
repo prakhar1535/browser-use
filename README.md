@@ -45,9 +45,7 @@ after running the server, add http://localhost:8000/sse to your client UI, or in
 #### windsurf
 - ```~/.codeium/windsurf/mcp_config.json```
 #### claude
-##### macos
 - ```~/Library/Application Support/Claude/claude_desktop_config.json```
-##### windows
 - ```%APPDATA%\Claude\claude_desktop_config.json```
 
 
