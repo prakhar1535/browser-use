@@ -15,19 +15,10 @@ permissions:
 
 jobs:
   release-build:
-        
-
     runs-on: ubuntu-latest
-    outputs:
-      PACKAGE_NAME: ${{ steps.package_name.outputs.PACKAGE_NAME }}
+
     steps:
       - uses: actions/checkout@v4
-      - name: Extract package name
-        id: package_name
-        run: |
-          TAG_NAME=${{ github.ref_name }}
-          PACKAGE_NAME=$(echo $TAG_NAME | sed 's/-[0-9].*$//')
-          echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
 
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v5
@@ -46,7 +37,7 @@ jobs:
       - name: Publish build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package_name.outputs.PACKAGE_NAME }}-pypi-dists
+          name: pypi-dists
           path: "./dist"
 
   pypi-publish:
@@ -61,19 +52,24 @@ jobs:
     # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
     environment:
       name: pypi
-      url: https://pypi.org/project/browser-use-mcp-server/${{ github.event.release.name }}
+      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
+      # url: https://pypi.org/p/YOURPROJECT
+      #
+      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
+      # ALTERNATIVE: exactly, uncomment the following line instead:
+      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
 
     steps:
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build-pypi-dists.outputs.PACKAGE_NAME}}-pypi-dists
-          path: "./dist"
+          name: pypi-dists
+          path: dist/
 
       - name: Publish release distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: "./dist"
+          packages-dir: dist/
   github-release:
     name: >-
       Sign the Python 🐍 distribution 📦 with Sigstore
@@ -90,8 +86,8 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
-        name: ${{ needs.build-pypi-dists.outputs.PACKAGE_NAME}}-pypi-dists
-        path: "./dist"
+        name: python-package-distributions
+        path: dist/
     - name: Sign the dists with Sigstore
       uses: sigstore/gh-action-sigstore-python@v3.0.0
       with:
@@ -114,5 +110,5 @@ jobs:
       # sigstore-produced signatures and certificates.
       run: >-
         gh release upload
-        ${{ needs.build-pypi-dists.outputs.PACKAGE_NAME}} dist/**
+        "$GITHUB_REF_NAME" dist/**
         --repo "$GITHUB_REPOSITORY"
