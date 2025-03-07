@@ -64,7 +64,7 @@ RUN mkdir -p ~/.vnc && \
     chmod 600 /root/.vnc/passwd && \
     printf '#!/bin/sh\nunset SESSION_MANAGER\nunset DBUS_SESSION_BUS_ADDRESS\nstartxfce4' > /root/.vnc/xstartup && \
     chmod +x /root/.vnc/xstartup && \
-    printf '#!/bin/bash\nvncserver -depth 24 -geometry 1920x1080 -localhost no -PasswordFile /root/.vnc/passwd :0\nproxy-login-automator\npython /app/main.py' > /app/boot.sh && \
+    printf '#!/bin/bash\nvncserver -depth 24 -geometry 1920x1080 -localhost no -PasswordFile /root/.vnc/passwd :0\nproxy-login-automator\npython server --transport sse --port 8000' > /app/boot.sh && \
     chmod +x /app/boot.sh
 
 ENTRYPOINT ["/bin/bash", "/app/boot.sh"]
