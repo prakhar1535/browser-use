@@ -1,6 +1,7 @@
-# ➡️ browser-use mcp server 
+# ➡️ browser-use mcp server
 
-[browser-use](https://github.com/browser-use/browser-use) MCP Server with SSE transport
+[browser-use](https://github.com/browser-use/browser-use) MCP Server with SSE
+transport
 
 ### requirements
 
@@ -24,11 +25,13 @@ uv run server --transport sse --port 8000
 - cursor.ai
 - claude desktop
 - claude code
-- <s>windsurf</s> ([windsurf](https://codeium.com/windsurf) doesn't support SSE yet)
+- <s>windsurf</s> ([windsurf](https://codeium.com/windsurf) doesn't support SSE
+  yet)
 
 ### usage
 
-after running the server, add http://localhost:8000/sse to your client UI, or in a mcp.json file:
+after running the server, add http://localhost:8000/sse to your client UI, or in
+a mcp.json file:
 
 ```json
 {
@@ -39,20 +42,24 @@ after running the server, add http://localhost:8000/sse to your client UI, or in
   }
 }
 ```
-#### cursor
-- ```./.cursor/mcp.json```
-#### windsurf
-- ```~/.codeium/windsurf/mcp_config.json```
-#### claude
-- ```~/Library/Application Support/Claude/claude_desktop_config.json```
-- ```%APPDATA%\Claude\claude_desktop_config.json```
 
+#### cursor
+
+- `./.cursor/mcp.json`
+
+#### windsurf
+
+- `~/.codeium/windsurf/mcp_config.json`
+
+#### claude
+
+- `~/Library/Application Support/Claude/claude_desktop_config.json`
+- `%APPDATA%\Claude\claude_desktop_config.json`
 
 then try asking your LLM the following:
 
-```open https://news.ycombinator.com and return the top ranked article```
+`open https://news.ycombinator.com and return the top ranked article`
 
 ### help
 
 for issues or interest reach out @ https://cobrowser.xyz
-

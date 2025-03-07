@@ -113,9 +113,9 @@ async def run_browser_task_async(task_id, url, action):
         if not await check_browser_health():
             task_store[task_id]["status"] = "failed"
             task_store[task_id]["end_time"] = datetime.now().isoformat()
-            task_store[task_id][
-                "error"
-            ] = "Browser context is unhealthy and could not be reset"
+            task_store[task_id]["error"] = (
+                "Browser context is unhealthy and could not be reset"
+            )
             return
 
         # Define step callback function with the correct signature
@@ -288,8 +288,8 @@ def main(port: int, transport: str) -> int:
                             "message": f"Browser task started. Please wait for {estimated_seconds} seconds, then check the result using browser_get_result or the resource URI. Always wait exactly 5 seconds between status checks.",
                             "estimated_time": f"{estimated_seconds} seconds",
                             "resource_uri": f"resource://browser_task/{task_id}",
-                            "sleep_command": f"sleep 5",
-                            "instruction": f"Use the terminal command 'sleep 5' to wait 5 seconds between status checks. IMPORTANT: Always use exactly 5 seconds, no more and no less.",
+                            "sleep_command": "sleep 5",
+                            "instruction": "Use the terminal command 'sleep 5' to wait 5 seconds between status checks. IMPORTANT: Always use exactly 5 seconds, no more and no less.",
                         },
                         indent=2,
                     ),
