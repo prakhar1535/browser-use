@@ -35,6 +35,7 @@ config = BrowserContextConfig(
 browser = Browser(
     config=BrowserConfig(
         chrome_instance_path=os.environ.get("CHROME_PATH"),
+        extra_chromium_args=["--no-sandbox", "--disable-gpu", "--disable-software-rasterizer", "--disable-dev-shm-usage", "--remote-debugging-port=9222"],
     )
 )
 context = BrowserContext(browser=browser, config=config)
