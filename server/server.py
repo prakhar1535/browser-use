@@ -1,3 +1,4 @@
+import os
 import anyio
 import click
 import asyncio
@@ -5,7 +6,7 @@ import uuid
 from datetime import datetime
 from langchain_openai import ChatOpenAI
 from browser_use import Agent
-from browser_use.browser.browser import Browser
+from browser_use.browser.browser import Browser, BrowserConfig
 import mcp.types as types
 from mcp.server.lowlevel import Server
 from dotenv import load_dotenv
@@ -31,7 +32,18 @@ config = BrowserContextConfig(
 )
 
 # Initialize browser and context
-browser = Browser()
+browser = Browser(
+    config=BrowserConfig(
+        chrome_instance_path=os.environ.get("CHROME_PATH"),
+        extra_chromium_args=[
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--disable-dev-shm-usage",
+            "--remote-debugging-port=9222",
+        ],
+    )
+)
 context = BrowserContext(browser=browser, config=config)
 
 # Initialize LLM
