@@ -11,7 +11,7 @@ from .server import (
     run_browser_task_async,
     check_browser_health,
     reset_browser_context,
-    create_mcp_server
+    create_mcp_server,
 )
 
 __all__ = [
@@ -22,4 +22,4 @@ __all__ = [
     "check_browser_health",
     "reset_browser_context",
     "create_mcp_server",
-] 
+]
