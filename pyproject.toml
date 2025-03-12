@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "browser-use-mcp-server"
-version = "0.1.2"
+version = "0.1.3"
 description = "MCP browser-use server library"
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
