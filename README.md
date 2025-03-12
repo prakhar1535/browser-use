@@ -20,6 +20,22 @@ uv run playwright install --with-deps --no-shell chromium
 uv run server --port 8000
 ```
 
+- the .env requires the following:
+
+```
+OPENAI_API_KEY=[your api key]
+CHROME_PATH=[only change this if you have a custom chrome build]
+```
+
+- we will be adding support for other LLM providers to power browser-use
+  (claude, grok, bedrock, etc)
+
+when building the dockerfile you can add in your own VNC server password:
+
+```
+docker build --build-arg VNC_PASSWORD=klaatubaradanikto .
+```
+
 ### tools
 
 - [x] SSE transport
