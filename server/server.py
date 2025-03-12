@@ -8,7 +8,6 @@ import os.path
 
 # Import from the browser-use-mcp-server package
 from browser_use_mcp_server.server import (
-    initialize_browser_context,
     create_mcp_server,
 )
 from langchain_openai import ChatOpenAI
@@ -64,97 +63,21 @@ def main(
     task_expiry_minutes: int,
 ) -> int:
     """Run the browser-use MCP server."""
-    # If Chrome path is explicitly provided, use it
-    if chrome_path and os.path.exists(chrome_path):
-        chrome_executable_path = chrome_path
-        logger.info(f"Using explicitly provided Chrome path: {chrome_executable_path}")
+    # Use Chrome path from command line arg, environment variable, or None
+    chrome_executable_path = chrome_path or os.environ.get("CHROME_PATH")
+    if chrome_executable_path:
+        logger.info(f"Using Chrome path: {chrome_executable_path}")
     else:
-        # Try to find Playwright's installed Chromium first
-        import os.path
-        import platform
-        from pathlib import Path
-        import subprocess
-        
-        # Try to get Playwright browsers directory
-        home_dir = str(Path.home())
-        system = platform.system()
-        
-        if system == "Darwin":  # macOS
-            playwright_browsers_path = os.path.join(home_dir, "Library", "Caches", "ms-playwright")
-        elif system == "Linux":
-            playwright_browsers_path = os.path.join(home_dir, ".cache", "ms-playwright")
-        elif system == "Windows":
-            playwright_browsers_path = os.path.join(home_dir, "AppData", "Local", "ms-playwright")
-        else:
-            playwright_browsers_path = None
-        
-        # Try to find the Chromium executable in the Playwright directory
-        chromium_executable_path = None
-        if playwright_browsers_path and os.path.exists(playwright_browsers_path):
-            logger.info(f"Found Playwright browsers directory at {playwright_browsers_path}")
-            # Look for chromium directories
-            try:
-                for root, dirs, files in os.walk(playwright_browsers_path):
-                    for dir in dirs:
-                        if "chromium" in dir.lower():
-                            # Check for executable in this directory
-                            if system == "Darwin":  # macOS
-                                exec_path = os.path.join(root, dir, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium")
-                            elif system == "Linux":
-                                exec_path = os.path.join(root, dir, "chrome-linux", "chrome")
-                            elif system == "Windows":
-                                exec_path = os.path.join(root, dir, "chrome-win", "chrome.exe")
-                            else:
-                                continue
-                                
-                            if os.path.exists(exec_path):
-                                chromium_executable_path = exec_path
-                                logger.info(f"Found Playwright Chromium at {chromium_executable_path}")
-                                break
-                    if chromium_executable_path:
-                        break
-            except Exception as e:
-                logger.warning(f"Error searching for Playwright Chromium: {str(e)}")
-        
-        # If Playwright Chromium not found, try standard locations
-        if not chromium_executable_path:
-            # Try to find Chromium/Chrome in common locations
-            potential_paths = [
-                # Environment variable
-                os.environ.get("CHROME_PATH"),
-                
-                # Common macOS paths
-                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                "/Applications/Chromium.app/Contents/MacOS/Chromium",
-                
-                # Common Linux paths
-                "/usr/bin/chromium",
-                "/usr/bin/chromium-browser",
-                "/usr/bin/google-chrome",
-                "/usr/bin/google-chrome-stable",
-            ]
-            
-            for path in potential_paths:
-                if path and os.path.exists(path):
-                    logger.info(f"Found browser at {path}")
-                    chromium_executable_path = path
-                    break
-        
-        # Use the found path or try with Playwright's default
-        if chromium_executable_path:
-            chrome_executable_path = chromium_executable_path
-            logger.info(f"Using browser executable at: {chrome_executable_path}")
-        else:
-            # If no specific path found, let Playwright find its own browser
-            logger.warning("No Chrome/Chromium path found, will let Playwright use its default browser")
-            chrome_executable_path = None
-    
+        logger.info(
+            "No Chrome path specified, letting Playwright use its default browser"
+        )
+
     # Initialize browser context
     try:
         # Using the approach from backup/server.py
         from browser_use.browser.context import BrowserContextConfig, BrowserContext
         from browser_use.browser.browser import Browser, BrowserConfig
-        
+
         # Browser context configuration
         config = BrowserContextConfig(
             wait_for_network_idle_page_load_time=0.6,
@@ -166,7 +89,7 @@ def main(
             highlight_elements=True,
             viewport_expansion=0,
         )
-        
+
         # Initialize browser and context directly
         browser_config = BrowserConfig(
             extra_chromium_args=[
@@ -177,36 +100,36 @@ def main(
                 "--remote-debugging-port=9222",
             ],
         )
-        
-        # Only set chrome_instance_path if we actually found a path
+
+        # Only set chrome_instance_path if we actually set a path in the env file
         if chrome_executable_path:
             browser_config.chrome_instance_path = chrome_executable_path
-        
+
         browser = Browser(config=browser_config)
         context = BrowserContext(browser=browser, config=config)
         logger.info("Browser context initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize browser context: {str(e)}")
         return 1
-    
+
     # Initialize LLM
     llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
-    
+
     # Create MCP server
     app = create_mcp_server(
         context=context,
         llm=llm,
         task_expiry_minutes=task_expiry_minutes,
     )
-    
+
     if transport == "sse":
         from mcp.server.sse import SseServerTransport
         from starlette.applications import Starlette
         from starlette.routing import Mount, Route
         import uvicorn
-        
+
         sse = SseServerTransport("/messages/")
-        
+
         async def handle_sse(request):
             try:
                 async with sse.connect_sse(
@@ -218,7 +141,7 @@ def main(
             except Exception as e:
                 logger.error(f"Error in handle_sse: {str(e)}")
                 raise
-                
+
         starlette_app = Starlette(
             debug=True,
             routes=[
@@ -226,17 +149,17 @@ def main(
                 Mount("/messages/", app=sse.handle_post_message),
             ],
         )
-        
+
         # Add a startup event to initialize the browser and start task cleanup
         @starlette_app.on_event("startup")
         async def startup_event():
             logger.info("Starting server and scheduling cleanup...")
-            
+
             # Start the cleanup task now that we have an event loop
-            if hasattr(app, 'cleanup_old_tasks'):
+            if hasattr(app, "cleanup_old_tasks"):
                 asyncio.create_task(app.cleanup_old_tasks())
                 logger.info("Task cleanup process scheduled")
-        
+
         # Add a shutdown event to clean up browser resources
         @starlette_app.on_event("shutdown")
         async def shutdown_event():
@@ -246,18 +169,18 @@ def main(
                 logger.info("Browser context closed successfully")
             except Exception as e:
                 logger.error(f"Error closing browser: {str(e)}")
-        
+
         uvicorn.run(starlette_app, host="0.0.0.0", port=port)
     else:
         from mcp.server.stdio import stdio_server
-        
+
         async def arun():
             try:
                 # Start the cleanup task now that we have an event loop
-                if hasattr(app, 'cleanup_old_tasks'):
+                if hasattr(app, "cleanup_old_tasks"):
                     asyncio.create_task(app.cleanup_old_tasks())
                     logger.info("Task cleanup process scheduled")
-                
+
                 async with stdio_server() as streams:
                     await app.run(
                         streams[0], streams[1], app.create_initialization_options()
@@ -270,9 +193,9 @@ def main(
                     await context.browser.close()
                 except Exception as e:
                     logger.error(f"Error cleaning up resources: {str(e)}")
-                    
+
         anyio.run(arun)
-        
+
     return 0
 
 

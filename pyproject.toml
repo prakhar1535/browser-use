@@ -27,6 +27,7 @@ dependencies = [
     "python-dotenv",
     "starlette",
     "uvicorn",
+    "playwright>=1.50.0",
 ]
 
 [project.optional-dependencies]
