@@ -10,10 +10,8 @@ import uvicorn
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.responses import JSONResponse, StreamingResponse
-import anyio
-from typing import Dict, Any, Optional, AsyncIterator
+from typing import Dict, Any, Optional
 import sys
-import json
 
 from langchain_openai import ChatOpenAI
 from mcp.server.lowlevel import Server
