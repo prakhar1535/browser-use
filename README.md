@@ -17,8 +17,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 uv pip install playwright
 uv run playwright install --with-deps --no-shell chromium
-uv run server --transport sse --port 8000
+uv run server --port 8000
 ```
+
+### tools
+
+- [x] SSE transport
+- [x] browser_use - Initiates browser tasks with URL and action
+- [x] browser_get_result - Retrieves results of async browser tasks
 
 ### supported clients
 
