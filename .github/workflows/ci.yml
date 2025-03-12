@@ -7,8 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group:
-    ${{ github.workflow }}-${{ github.ref_name }}-${{
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{
     github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
@@ -72,8 +71,7 @@ jobs:
         run: uvx ruff check .
 
       - name: "Validate project metadata"
-        run:
-          uvx --from 'validate-pyproject[all,store]' validate-pyproject
+        run: uvx --from 'validate-pyproject[all,store]' validate-pyproject
           pyproject.toml
 
   build-and-publish:
