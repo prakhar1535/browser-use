@@ -68,4 +68,7 @@ RUN mkdir -p ~/.vnc && \
     printf '#!/bin/bash\nvncserver -depth 24 -geometry 1920x1080 -localhost no -PasswordFile /root/.vnc/passwd :0\nproxy-login-automator\npython /app/server --port 8000' > /app/boot.sh && \
     chmod +x /app/boot.sh
 
+
+EXPOSE 8000
+
 ENTRYPOINT ["/bin/bash", "/app/boot.sh"]
