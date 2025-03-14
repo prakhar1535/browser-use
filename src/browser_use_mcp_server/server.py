@@ -138,9 +138,8 @@ async def reset_browser_context(context: BrowserContext) -> None:
         # If we get here, we need to reinitialize the browser
         try:
             # Get the original configuration from the context if possible
-            config = None
             if hasattr(context, "config"):
-                config = context.config
+                pass
 
             # Reinitialize the browser with the same configuration
             browser_config = BrowserConfig(
