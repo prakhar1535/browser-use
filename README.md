@@ -17,7 +17,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 uv pip install playwright
 uv run playwright install --with-deps --no-shell chromium
-uv run server --transport sse --port 8000
+uv run server --port 8000
 ```
 
 - the .env requires the following:
@@ -35,6 +35,12 @@ when building the dockerfile you can add in your own VNC server password:
 ```
 docker build --build-arg VNC_PASSWORD=klaatubaradanikto .
 ```
+
+### tools
+
+- [x] SSE transport
+- [x] browser_use - Initiates browser tasks with URL and action
+- [x] browser_get_result - Retrieves results of async browser tasks
 
 ### supported clients
 
@@ -79,3 +85,11 @@ then try asking your LLM the following:
 ### help
 
 for issues or interest reach out @ https://cobrowser.xyz
+
+# stars
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=co-browser/browser-use-mcp-server&type=Date&theme=dark" />
+  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=co-browser/browser-use-mcp-server&type=Date" />
+  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=co-browser/browser-use-mcp-server&type=Date" />
+</picture>

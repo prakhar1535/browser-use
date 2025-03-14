@@ -1,7 +1,5 @@
 FROM ghcr.io/astral-sh/uv:bookworm-slim AS builder
 
-ARG VNC_PASSWORD=browser-use
-
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_INSTALL_DIR=/python \
@@ -25,6 +23,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 FROM debian:bookworm-slim AS runtime
+
+ARG VNC_PASSWORD="browser-use"
 
 # Install required packages including Chromium and clean up in the same layer
 RUN apt-get update && \
@@ -56,15 +56,19 @@ COPY --from=builder --chown=app:app /app /app
 ENV PATH="/app/.venv/bin:$PATH" \
     DISPLAY=:0 \
     CHROME_BIN=/usr/bin/chromium \
-    CHROMIUM_FLAGS="--no-sandbox --headless --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage"
+    CHROMIUM_FLAGS="--no-sandbox --headless --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage" \
+    CHROME_PATH="/usr/bin/chromium"
 
 # Combine VNC setup commands to reduce layers
 RUN mkdir -p ~/.vnc && \
-    echo ${VNC_PASSWORD} | vncpasswd -f > /root/.vnc/passwd && \
+    echo $VNC_PASSWORD | vncpasswd -f > /root/.vnc/passwd && \
     chmod 600 /root/.vnc/passwd && \
     printf '#!/bin/sh\nunset SESSION_MANAGER\nunset DBUS_SESSION_BUS_ADDRESS\nstartxfce4' > /root/.vnc/xstartup && \
     chmod +x /root/.vnc/xstartup && \
-    printf '#!/bin/bash\nvncserver -depth 24 -geometry 1920x1080 -localhost no -PasswordFile /root/.vnc/passwd :0\nproxy-login-automator\npython /app/server --transport sse --port 8000' > /app/boot.sh && \
+    printf '#!/bin/bash\nvncserver -depth 24 -geometry 1920x1080 -localhost no -PasswordFile /root/.vnc/passwd :0\nproxy-login-automator\npython /app/server --port 8000' > /app/boot.sh && \
     chmod +x /app/boot.sh
+
+
+EXPOSE 8000
 
 ENTRYPOINT ["/bin/bash", "/app/boot.sh"]

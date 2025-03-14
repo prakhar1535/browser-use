@@ -1,64 +1,63 @@
+"""
+Browser Use MCP Server
+
+This module implements an MCP (Model-Control-Protocol) server for browser automation
+using the browser_use library. It provides functionality to interact with a browser instance
+via an async task queue, allowing for long-running browser tasks to be executed asynchronously
+while providing status updates and results.
+
+The server supports Server-Sent Events (SSE) for web-based interfaces.
+"""
+
 import os
-import anyio
 import click
 import asyncio
 import uuid
 from datetime import datetime
-from langchain_openai import ChatOpenAI
-from browser_use import Agent
-from browser_use.browser.browser import Browser, BrowserConfig
-import mcp.types as types
-from mcp.server.lowlevel import Server
 from dotenv import load_dotenv
-import json
 import logging
+import json
+import traceback
+
+# Import from browser-use library
 from browser_use.browser.context import BrowserContextConfig, BrowserContext
+from browser_use.browser.browser import Browser, BrowserConfig
+from browser_use import Agent
+
+# Import MCP server components
+from mcp.server.lowlevel import Server
+import mcp.types as types
+
+# Import LLM provider
+from langchain_openai import ChatOpenAI
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-# Browser context configuration
-config = BrowserContextConfig(
-    wait_for_network_idle_page_load_time=0.6,
-    maximum_wait_page_load_time=1.2,
-    minimum_wait_page_load_time=0.2,
-    browser_window_size={"width": 1280, "height": 1100},
-    locale="en-US",
-    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36",
-    highlight_elements=True,
-    viewport_expansion=0,
-)
-
-# Initialize browser and context
-browser = Browser(
-    config=BrowserConfig(
-        chrome_instance_path=os.environ.get("CHROME_PATH"),
-        extra_chromium_args=[
-            "--no-sandbox",
-            "--disable-gpu",
-            "--disable-software-rasterizer",
-            "--disable-dev-shm-usage",
-            "--remote-debugging-port=9222",
-        ],
-    )
-)
-context = BrowserContext(browser=browser, config=config)
-
-# Initialize LLM
-llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
-
-# Flag to track browser context health
-browser_context_healthy = True
+# Load environment variables
+load_dotenv()
 
 # Task storage for async operations
 task_store = {}
 
+# Flag to track browser context health
+browser_context_healthy = True
+
+# Store global browser context and configuration
+browser = None
+context = None
+config = None
+
 
 async def reset_browser_context():
-    """Reset the browser context to a clean state."""
-    global context, browser, browser_context_healthy
+    """
+    Reset the browser context to a clean state.
+
+    This function attempts to close the existing context and create a new one.
+    If that fails, it tries to recreate the entire browser instance.
+    """
+    global context, browser, browser_context_healthy, config
 
     logger.info("Resetting browser context")
     try:
@@ -75,10 +74,28 @@ async def reset_browser_context():
     except Exception as e:
         logger.error(f"Failed to reset browser context: {str(e)}")
         browser_context_healthy = False
+
         # If we can't reset the context, try to reset the browser
         try:
             await browser.close()
-            browser = Browser()
+
+            # Recreate browser with same configuration
+            browser_config = BrowserConfig(
+                extra_chromium_args=[
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-dev-shm-usage",
+                    "--remote-debugging-port=9222",
+                ],
+            )
+
+            # Only set chrome_instance_path if we have a path from environment or command line
+            chrome_path = os.environ.get("CHROME_PATH")
+            if chrome_path:
+                browser_config.chrome_instance_path = chrome_path
+
+            browser = Browser(config=browser_config)
             context = BrowserContext(browser=browser, config=config)
             browser_context_healthy = True
             logger.info("Browser reset successfully")
@@ -88,7 +105,14 @@ async def reset_browser_context():
 
 
 async def check_browser_health():
-    """Check if the browser context is healthy."""
+    """
+    Check if the browser context is healthy by attempting to access the current page.
+
+    If the context is unhealthy, attempts to reset it.
+
+    Returns:
+        bool: True if the browser context is healthy, False otherwise.
+    """
     global browser_context_healthy
 
     if not browser_context_healthy:
@@ -106,8 +130,19 @@ async def check_browser_health():
         return browser_context_healthy
 
 
-async def run_browser_task_async(task_id, url, action):
-    """Run a browser task asynchronously and store the result."""
+async def run_browser_task_async(task_id, url, action, llm):
+    """
+    Run a browser task asynchronously and store the result.
+
+    This function executes a browser automation task with the given URL and action,
+    and updates the task store with progress and results.
+
+    Args:
+        task_id (str): Unique identifier for the task
+        url (str): URL to navigate to
+        action (str): Action to perform after navigation
+        llm: Language model to use for browser agent
+    """
     try:
         # Update task status to running
         task_store[task_id]["status"] = "running"
@@ -176,7 +211,7 @@ async def run_browser_task_async(task_id, url, action):
             register_done_callback=done_callback,
         )
 
-        # Run the agent
+        # Run the agent with a reasonable step limit
         ret = await agent.run(max_steps=10)
 
         # Get the final result
@@ -200,7 +235,7 @@ async def run_browser_task_async(task_id, url, action):
         extracted_content = ret.extracted_content()
         steps_taken = ret.number_of_steps()
 
-        # Create a focused response with the most relevant information for an LLM
+        # Create a focused response with the most relevant information
         response_data = {
             "final_result": result_text,
             "success": is_successful,
@@ -219,8 +254,6 @@ async def run_browser_task_async(task_id, url, action):
 
     except Exception as e:
         logger.error(f"Error in async browser task: {str(e)}")
-        import traceback
-
         tb = traceback.format_exc()
 
         # Mark the browser context as unhealthy
@@ -243,16 +276,56 @@ async def run_browser_task_async(task_id, url, action):
             browser_context_healthy = False
 
 
-@click.command()
-@click.option("--port", default=8000, help="Port to listen on for SSE")
-@click.option(
-    "--transport",
-    type=click.Choice(["stdio", "sse"]),
-    default="stdio",
-    help="Transport type",
-)
-def main(port: int, transport: str) -> int:
-    load_dotenv()
+async def cleanup_old_tasks():
+    """
+    Periodically clean up old completed tasks to prevent memory leaks.
+
+    This function runs continuously in the background, removing tasks that have been
+    completed or failed for more than 1 hour to conserve memory.
+    """
+    while True:
+        try:
+            # Sleep first to avoid cleaning up tasks too early
+            await asyncio.sleep(3600)  # Run cleanup every hour
+
+            current_time = datetime.now()
+            tasks_to_remove = []
+
+            # Find completed tasks older than 1 hour
+            for task_id, task_data in task_store.items():
+                if (
+                    task_data["status"] in ["completed", "failed"]
+                    and "end_time" in task_data
+                ):
+                    end_time = datetime.fromisoformat(task_data["end_time"])
+                    hours_elapsed = (current_time - end_time).total_seconds() / 3600
+
+                    if hours_elapsed > 1:  # Remove tasks older than 1 hour
+                        tasks_to_remove.append(task_id)
+
+            # Remove old tasks
+            for task_id in tasks_to_remove:
+                del task_store[task_id]
+
+            if tasks_to_remove:
+                logger.info(f"Cleaned up {len(tasks_to_remove)} old tasks")
+
+        except Exception as e:
+            logger.error(f"Error in task cleanup: {str(e)}")
+
+
+def create_mcp_server(llm, task_expiry_minutes=60):
+    """
+    Create and configure an MCP server for browser interaction.
+
+    Args:
+        llm: The language model to use for browser agent
+        task_expiry_minutes (int): Minutes after which tasks are considered expired
+
+    Returns:
+        Server: Configured MCP server instance
+    """
+    # Create MCP server instance
     app = Server("browser_use")
 
     @app.call_tool()
@@ -261,7 +334,7 @@ def main(port: int, transport: str) -> int:
     ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
         global browser_context_healthy
 
-        # Handle different tool types
+        # Handle browser_use tool
         if name == "browser_use":
             # Check required arguments
             if "url" not in arguments:
@@ -283,7 +356,9 @@ def main(port: int, transport: str) -> int:
 
             # Start task in background
             asyncio.create_task(
-                run_browser_task_async(task_id, arguments["url"], arguments["action"])
+                run_browser_task_async(
+                    task_id, arguments["url"], arguments["action"], llm
+                )
             )
 
             # Estimate task duration
@@ -308,6 +383,7 @@ def main(port: int, transport: str) -> int:
                 )
             ]
 
+        # Handle browser_get_result tool
         elif name == "browser_get_result":
             # Get result of async task
             if "task_id" not in arguments:
@@ -441,112 +517,166 @@ def main(port: int, transport: str) -> int:
             )
         ]
 
-    if transport == "sse":
-        from mcp.server.sse import SseServerTransport
-        from starlette.applications import Starlette
-        from starlette.routing import Mount, Route
+    # Add cleanup_old_tasks function to app for later scheduling
+    app.cleanup_old_tasks = cleanup_old_tasks
 
-        sse = SseServerTransport("/messages/")
+    return app
 
-        async def handle_sse(request):
-            try:
-                async with sse.connect_sse(
-                    request.scope, request.receive, request._send
-                ) as streams:
-                    await app.run(
-                        streams[0], streams[1], app.create_initialization_options()
-                    )
-            except Exception as e:
-                logger.error(f"Error in handle_sse: {str(e)}")
-                # Ensure browser context is reset if there's an error
-                asyncio.create_task(reset_browser_context())
-                raise
 
-        starlette_app = Starlette(
-            debug=True,
-            routes=[
-                Route("/sse", endpoint=handle_sse),
-                Mount("/messages/", app=sse.handle_post_message),
+@click.command()
+@click.option("--port", default=8000, help="Port to listen on for SSE")
+@click.option(
+    "--chrome-path",
+    default=None,
+    help="Path to Chrome executable",
+)
+@click.option(
+    "--window-width",
+    default=1280,
+    help="Browser window width",
+)
+@click.option(
+    "--window-height",
+    default=1100,
+    help="Browser window height",
+)
+@click.option(
+    "--locale",
+    default="en-US",
+    help="Browser locale",
+)
+@click.option(
+    "--task-expiry-minutes",
+    default=60,
+    help="Minutes after which tasks are considered expired",
+)
+def main(
+    port: int,
+    chrome_path: str,
+    window_width: int,
+    window_height: int,
+    locale: str,
+    task_expiry_minutes: int,
+) -> int:
+    """
+    Run the browser-use MCP server.
+
+    This function initializes the browser context, creates the MCP server,
+    and runs it with the SSE transport.
+    """
+    global browser, context, config, browser_context_healthy
+
+    # Use Chrome path from command line arg, environment variable, or None
+    chrome_executable_path = chrome_path or os.environ.get("CHROME_PATH")
+    if chrome_executable_path:
+        logger.info(f"Using Chrome path: {chrome_executable_path}")
+    else:
+        logger.info(
+            "No Chrome path specified, letting Playwright use its default browser"
+        )
+
+    # Initialize browser context
+    try:
+        # Browser context configuration
+        config = BrowserContextConfig(
+            wait_for_network_idle_page_load_time=0.6,
+            maximum_wait_page_load_time=1.2,
+            minimum_wait_page_load_time=0.2,
+            browser_window_size={"width": window_width, "height": window_height},
+            locale=locale,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36",
+            highlight_elements=True,
+            viewport_expansion=0,
+        )
+
+        # Initialize browser and context directly
+        browser_config = BrowserConfig(
+            extra_chromium_args=[
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-dev-shm-usage",
+                "--remote-debugging-port=9222",
             ],
         )
 
-        import uvicorn
+        # Only set chrome_instance_path if we actually found a path
+        if chrome_executable_path:
+            browser_config.chrome_instance_path = chrome_executable_path
 
-        # Add a startup event to initialize the browser
-        @starlette_app.on_event("startup")
-        async def startup_event():
-            logger.info("Starting browser context...")
-            await reset_browser_context()
-            logger.info("Browser context started")
+        browser = Browser(config=browser_config)
+        context = BrowserContext(browser=browser, config=config)
+        browser_context_healthy = True
+        logger.info("Browser context initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize browser context: {str(e)}")
+        return 1
 
-            # Start background task cleanup
-            asyncio.create_task(cleanup_old_tasks())
+    # Initialize LLM
+    llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
 
-        @starlette_app.on_event("shutdown")
-        async def shutdown_event():
-            logger.info("Shutting down browser context...")
+    # Create MCP server
+    app = create_mcp_server(
+        llm=llm,
+        task_expiry_minutes=task_expiry_minutes,
+    )
+
+    # Set up SSE transport
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+    import uvicorn
+
+    sse = SseServerTransport("/messages/")
+
+    async def handle_sse(request):
+        try:
+            async with sse.connect_sse(
+                request.scope, request.receive, request._send
+            ) as streams:
+                await app.run(
+                    streams[0], streams[1], app.create_initialization_options()
+                )
+        except Exception as e:
+            logger.error(f"Error in handle_sse: {str(e)}")
+            # Ensure browser context is reset if there's an error
+            asyncio.create_task(reset_browser_context())
+            raise
+
+    starlette_app = Starlette(
+        debug=True,
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Mount("/messages/", app=sse.handle_post_message),
+        ],
+    )
+
+    # Add a startup event to initialize the browser
+    @starlette_app.on_event("startup")
+    async def startup_event():
+        logger.info("Starting browser context...")
+        await reset_browser_context()
+        logger.info("Browser context started")
+
+        # Start background task cleanup
+        asyncio.create_task(app.cleanup_old_tasks())
+        logger.info("Task cleanup process scheduled")
+
+    # Add a shutdown event to clean up browser resources
+    @starlette_app.on_event("shutdown")
+    async def shutdown_event():
+        logger.info("Shutting down browser context...")
+        try:
             await browser.close()
-            logger.info("Browser context closed")
+            logger.info("Browser context closed successfully")
+        except Exception as e:
+            logger.error(f"Error closing browser: {str(e)}")
 
-        async def cleanup_old_tasks():
-            """Periodically clean up old completed tasks to prevent memory leaks."""
-            while True:
-                try:
-                    # Sleep first to avoid cleaning up tasks too early
-                    await asyncio.sleep(3600)  # Run cleanup every hour
-
-                    current_time = datetime.now()
-                    tasks_to_remove = []
-
-                    # Find completed tasks older than 1 hour
-                    for task_id, task_data in task_store.items():
-                        if (
-                            task_data["status"] in ["completed", "failed"]
-                            and "end_time" in task_data
-                        ):
-                            end_time = datetime.fromisoformat(task_data["end_time"])
-                            hours_elapsed = (
-                                current_time - end_time
-                            ).total_seconds() / 3600
-
-                            if hours_elapsed > 1:  # Remove tasks older than 1 hour
-                                tasks_to_remove.append(task_id)
-
-                    # Remove old tasks
-                    for task_id in tasks_to_remove:
-                        del task_store[task_id]
-
-                    if tasks_to_remove:
-                        logger.info(f"Cleaned up {len(tasks_to_remove)} old tasks")
-
-                except Exception as e:
-                    logger.error(f"Error in task cleanup: {str(e)}")
-
-        uvicorn.run(starlette_app, host="0.0.0.0", port=port)
-    else:
-        from mcp.server.stdio import stdio_server
-
-        async def arun():
-            try:
-                # Ensure browser context is healthy before starting
-                await check_browser_health()
-
-                async with stdio_server() as streams:
-                    await app.run(
-                        streams[0], streams[1], app.create_initialization_options()
-                    )
-            except Exception as e:
-                logger.error(f"Error in arun: {str(e)}")
-                # Ensure browser context is reset if there's an error
-                await reset_browser_context()
-            finally:
-                # Clean up resources
-                try:
-                    await context.close()
-                    await browser.close()
-                except Exception as e:
-                    logger.error(f"Error cleaning up resources: {str(e)}")
-
-        anyio.run(arun)
+    # Run uvicorn server
+    uvicorn.run(starlette_app, host="0.0.0.0", port=port)
 
     return 0
+
+
+if __name__ == "__main__":
+    main()
