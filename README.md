@@ -30,10 +30,15 @@ CHROME_PATH=[only change this if you have a custom chrome build]
 - we will be adding support for other LLM providers to power browser-use
   (claude, grok, bedrock, etc)
 
-when building the dockerfile you can add in your own VNC server password:
+when building the docker image, you can use Docker secrets for VNC password:
 
 ```
-docker build --build-arg VNC_PASSWORD=klaatubaradanikto .
+# With Docker secrets (recommended for production)
+echo "your-secure-password" > vnc_password.txt
+docker run -v $(pwd)/vnc_password.txt:/run/secrets/vnc_password your-image-name
+
+# Or during development with the default password
+docker build .
 ```
 
 ### tools
