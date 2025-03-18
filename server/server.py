@@ -29,11 +29,12 @@ from browser_use.browser.browser import Browser, BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
 
 # MCP server components
-from mcp.server.lowlevel import Server
+from mcp.server import Server
 import mcp.types as types
 
 # LLM provider
 from langchain_openai import ChatOpenAI
+from langchain_core.language_models import BaseLanguageModel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -42,24 +43,48 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Constants
-DEFAULT_WINDOW_WIDTH = 1280
-DEFAULT_WINDOW_HEIGHT = 1100
-DEFAULT_LOCALE = "en-US"
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36"
-DEFAULT_TASK_EXPIRY_MINUTES = 60
-DEFAULT_ESTIMATED_TASK_SECONDS = 60
-CLEANUP_INTERVAL_SECONDS = 3600  # 1 hour
-MAX_AGENT_STEPS = 10
 
-# Browser configuration arguments
-BROWSER_ARGS = [
-    "--no-sandbox",
-    "--disable-gpu",
-    "--disable-software-rasterizer",
-    "--disable-dev-shm-usage",
-    "--remote-debugging-port=0",  # Use random port to avoid conflicts
-]
+def init_configuration() -> Dict[str, any]:
+    """
+    Initialize configuration from environment variables with defaults.
+
+    Returns:
+        Dictionary containing all configuration parameters
+    """
+    config = {
+        # Browser window settings
+        "DEFAULT_WINDOW_WIDTH": int(os.environ.get("BROWSER_WINDOW_WIDTH", 1280)),
+        "DEFAULT_WINDOW_HEIGHT": int(os.environ.get("BROWSER_WINDOW_HEIGHT", 1100)),
+        # Browser config settings
+        "DEFAULT_LOCALE": os.environ.get("BROWSER_LOCALE", "en-US"),
+        "DEFAULT_USER_AGENT": os.environ.get(
+            "BROWSER_USER_AGENT",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36",
+        ),
+        # Task settings
+        "DEFAULT_TASK_EXPIRY_MINUTES": int(os.environ.get("TASK_EXPIRY_MINUTES", 60)),
+        "DEFAULT_ESTIMATED_TASK_SECONDS": int(
+            os.environ.get("ESTIMATED_TASK_SECONDS", 60)
+        ),
+        "CLEANUP_INTERVAL_SECONDS": int(
+            os.environ.get("CLEANUP_INTERVAL_SECONDS", 3600)
+        ),  # 1 hour
+        "MAX_AGENT_STEPS": int(os.environ.get("MAX_AGENT_STEPS", 10)),
+        # Browser arguments
+        "BROWSER_ARGS": [
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--disable-dev-shm-usage",
+            "--remote-debugging-port=0",  # Use random port to avoid conflicts
+        ],
+    }
+
+    return config
+
+
+# Initialize configuration
+CONFIG = init_configuration()
 
 # Task storage for async operations
 task_store: Dict[str, Dict[str, Any]] = {}
@@ -67,9 +92,9 @@ task_store: Dict[str, Dict[str, Any]] = {}
 
 async def create_browser_context_for_task(
     chrome_path: Optional[str] = None,
-    window_width: int = DEFAULT_WINDOW_WIDTH,
-    window_height: int = DEFAULT_WINDOW_HEIGHT,
-    locale: str = DEFAULT_LOCALE,
+    window_width: int = CONFIG["DEFAULT_WINDOW_WIDTH"],
+    window_height: int = CONFIG["DEFAULT_WINDOW_HEIGHT"],
+    locale: str = CONFIG["DEFAULT_LOCALE"],
 ) -> Tuple[Browser, BrowserContext]:
     """
     Create a fresh browser and context for a task.
@@ -92,7 +117,7 @@ async def create_browser_context_for_task(
     try:
         # Create browser configuration
         browser_config = BrowserConfig(
-            extra_chromium_args=BROWSER_ARGS,
+            extra_chromium_args=CONFIG["BROWSER_ARGS"],
         )
 
         # Set chrome path if provided
@@ -109,7 +134,7 @@ async def create_browser_context_for_task(
             minimum_wait_page_load_time=0.2,
             browser_window_size={"width": window_width, "height": window_height},
             locale=locale,
-            user_agent=DEFAULT_USER_AGENT,
+            user_agent=CONFIG["DEFAULT_USER_AGENT"],
             highlight_elements=True,
             viewport_expansion=0,
         )
@@ -127,10 +152,10 @@ async def run_browser_task_async(
     task_id: str,
     url: str,
     action: str,
-    llm: Any,
-    window_width: int = DEFAULT_WINDOW_WIDTH,
-    window_height: int = DEFAULT_WINDOW_HEIGHT,
-    locale: str = DEFAULT_LOCALE,
+    llm: BaseLanguageModel,
+    window_width: int = CONFIG["DEFAULT_WINDOW_WIDTH"],
+    window_height: int = CONFIG["DEFAULT_WINDOW_HEIGHT"],
+    locale: str = CONFIG["DEFAULT_LOCALE"],
 ) -> None:
     """
     Run a browser task asynchronously and store the result.
@@ -220,7 +245,7 @@ async def run_browser_task_async(
         )
 
         # Run the agent with a reasonable step limit
-        agent_result = await agent.run(max_steps=MAX_AGENT_STEPS)
+        agent_result = await agent.run(max_steps=CONFIG["MAX_AGENT_STEPS"])
 
         # Get the final result
         final_result = agent_result.final_result()
@@ -294,7 +319,7 @@ async def cleanup_old_tasks() -> None:
     while True:
         try:
             # Sleep first to avoid cleaning up tasks too early
-            await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+            await asyncio.sleep(CONFIG["CLEANUP_INTERVAL_SECONDS"])
 
             current_time = datetime.now()
             tasks_to_remove = []
@@ -323,11 +348,11 @@ async def cleanup_old_tasks() -> None:
 
 
 def create_mcp_server(
-    llm: Any,
-    task_expiry_minutes: int = DEFAULT_TASK_EXPIRY_MINUTES,
-    window_width: int = DEFAULT_WINDOW_WIDTH,
-    window_height: int = DEFAULT_WINDOW_HEIGHT,
-    locale: str = DEFAULT_LOCALE,
+    llm: BaseLanguageModel,
+    task_expiry_minutes: int = CONFIG["DEFAULT_TASK_EXPIRY_MINUTES"],
+    window_width: int = CONFIG["DEFAULT_WINDOW_WIDTH"],
+    window_height: int = CONFIG["DEFAULT_WINDOW_HEIGHT"],
+    locale: str = CONFIG["DEFAULT_LOCALE"],
 ) -> Server:
     """
     Create and configure an MCP server for browser interaction.
@@ -403,8 +428,8 @@ def create_mcp_server(
                         {
                             "task_id": task_id,
                             "status": "pending",
-                            "message": f"Browser task started. Please wait for {DEFAULT_ESTIMATED_TASK_SECONDS} seconds, then check the result using browser_get_result or the resource URI. Always wait exactly 5 seconds between status checks.",
-                            "estimated_time": f"{DEFAULT_ESTIMATED_TASK_SECONDS} seconds",
+                            "message": f"Browser task started. Please wait for {CONFIG['DEFAULT_ESTIMATED_TASK_SECONDS']} seconds, then check the result using browser_get_result or the resource URI. Always wait exactly 5 seconds between status checks.",
+                            "estimated_time": f"{CONFIG['DEFAULT_ESTIMATED_TASK_SECONDS']} seconds",
                             "resource_uri": f"resource://browser_task/{task_id}",
                             "sleep_command": "sleep 5",
                             "instruction": "Use the terminal command 'sleep 5' to wait 5 seconds between status checks. IMPORTANT: Always use exactly 5 seconds, no more and no less.",
@@ -577,29 +602,21 @@ def create_mcp_server(
 
 @click.command()
 @click.option("--port", default=8000, help="Port to listen on for SSE")
-@click.option(
-    "--chrome-path",
-    default=None,
-    help="Path to Chrome executable",
-)
+@click.option("--chrome-path", default=None, help="Path to Chrome executable")
 @click.option(
     "--window-width",
-    default=DEFAULT_WINDOW_WIDTH,
+    default=CONFIG["DEFAULT_WINDOW_WIDTH"],
     help="Browser window width",
 )
 @click.option(
     "--window-height",
-    default=DEFAULT_WINDOW_HEIGHT,
+    default=CONFIG["DEFAULT_WINDOW_HEIGHT"],
     help="Browser window height",
 )
-@click.option(
-    "--locale",
-    default=DEFAULT_LOCALE,
-    help="Browser locale",
-)
+@click.option("--locale", default=CONFIG["DEFAULT_LOCALE"], help="Browser locale")
 @click.option(
     "--task-expiry-minutes",
-    default=DEFAULT_TASK_EXPIRY_MINUTES,
+    default=CONFIG["DEFAULT_TASK_EXPIRY_MINUTES"],
     help="Minutes after which tasks are considered expired",
 )
 def main(
@@ -682,6 +699,21 @@ def main(
     async def startup_event():
         """Initialize the server on startup."""
         logger.info("Starting MCP server...")
+
+        # Sanity checks for critical configuration
+        if port <= 0 or port > 65535:
+            logger.error(f"Invalid port number: {port}")
+            raise ValueError(f"Invalid port number: {port}")
+
+        if window_width <= 0 or window_height <= 0:
+            logger.error(f"Invalid window dimensions: {window_width}x{window_height}")
+            raise ValueError(
+                f"Invalid window dimensions: {window_width}x{window_height}"
+            )
+
+        if task_expiry_minutes <= 0:
+            logger.error(f"Invalid task expiry minutes: {task_expiry_minutes}")
+            raise ValueError(f"Invalid task expiry minutes: {task_expiry_minutes}")
 
         # Start background task cleanup
         asyncio.create_task(app.cleanup_old_tasks())
