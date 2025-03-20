@@ -18,6 +18,10 @@ import traceback
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple, Union
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 
 # Third-party imports
 import click
@@ -600,32 +604,184 @@ def create_mcp_server(
     return app
 
 
-@click.command()
-@click.option("--port", default=8000, help="Port to listen on for SSE")
-@click.option("--chrome-path", default=None, help="Path to Chrome executable")
-@click.option(
-    "--window-width",
-    default=CONFIG["DEFAULT_WINDOW_WIDTH"],
-    help="Browser window width",
-)
-@click.option(
-    "--window-height",
-    default=CONFIG["DEFAULT_WINDOW_HEIGHT"],
-    help="Browser window height",
-)
-@click.option("--locale", default=CONFIG["DEFAULT_LOCALE"], help="Browser locale")
-@click.option(
-    "--task-expiry-minutes",
-    default=CONFIG["DEFAULT_TASK_EXPIRY_MINUTES"],
-    help="Minutes after which tasks are considered expired",
-)
+# Add the API routes function
+def create_api_routes(app):
+    """
+    Create HTTP API routes for direct browser automation.
+    
+    Args:
+        app: The MCP server instance
+        
+    Returns:
+        List of Starlette Route objects
+    """
+    async def api_start_browser_task(request):
+        """
+        HTTP endpoint to start a browser task.
+        
+        Request body should contain:
+        {
+            "url": "https://example.com",
+            "action": "Extract the main heading"
+        }
+        """
+        try:
+            # Parse JSON request body
+            body = await request.json()
+            
+            # Validate required fields
+            if "url" not in body:
+                return JSONResponse({"error": "Missing required field 'url'"}, status_code=400)
+            if "action" not in body:
+                return JSONResponse({"error": "Missing required field 'action'"}, status_code=400)
+            
+            # Generate task ID
+            task_id = str(uuid.uuid4())
+            
+            # Initialize task in store
+            task_store[task_id] = {
+                "id": task_id,
+                "status": "pending",
+                "url": body["url"],
+                "action": body["action"],
+                "created_at": datetime.now().isoformat(),
+            }
+            
+            # Get custom parameters if provided
+            window_width = body.get("window_width", CONFIG["DEFAULT_WINDOW_WIDTH"])
+            window_height = body.get("window_height", CONFIG["DEFAULT_WINDOW_HEIGHT"])
+            locale = body.get("locale", CONFIG["DEFAULT_LOCALE"])
+            
+            # Create LLM instance (or reuse from app)
+            llm = ChatOpenAI(model=body.get("model", "gpt-4o"), temperature=body.get("temperature", 0.0))
+            
+            # Start task in background
+            asyncio.create_task(
+                run_browser_task_async(
+                    task_id=task_id,
+                    url=body["url"],
+                    action=body["action"],
+                    llm=llm,
+                    window_width=window_width,
+                    window_height=window_height,
+                    locale=locale,
+                )
+            )
+            
+            # Set wait parameter
+            wait = body.get("wait", False)
+            
+            if wait:
+                # If wait=True, we'll wait for the task to complete
+                # This makes the API call synchronous
+                max_wait_seconds = body.get("max_wait_seconds", 120)
+                start_time = datetime.now()
+                
+                # Wait for task to complete or timeout
+                while (datetime.now() - start_time).total_seconds() < max_wait_seconds:
+                    # Check if task completed
+                    if task_id in task_store and task_store[task_id]["status"] in ["completed", "failed"]:
+                        # Return full result
+                        return JSONResponse(task_store[task_id])
+                    
+                    # Sleep briefly before checking again
+                    await asyncio.sleep(0.5)
+                
+                # If we get here, task timed out
+                return JSONResponse({
+                    "task_id": task_id,
+                    "status": "timeout",
+                    "message": f"Task is still running after {max_wait_seconds} seconds. Use GET /api/browser/tasks/{task_id} to check status later."
+                })
+            else:
+                # Return task ID for async workflow
+                return JSONResponse({
+                    "task_id": task_id,
+                    "status": "pending",
+                    "message": "Browser task started. Check status at GET /api/browser/tasks/{task_id}",
+                    "status_url": f"/api/browser/tasks/{task_id}"
+                })
+            
+        except Exception as e:
+            logger.error(f"Error in API start task: {str(e)}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+    
+    async def api_get_task_status(request):
+        """
+        HTTP endpoint to get the status of a browser task.
+        """
+        try:
+            # Get task ID from path parameters
+            task_id = request.path_params["task_id"]
+            
+            if task_id not in task_store:
+                return JSONResponse({"error": "Task not found"}, status_code=404)
+            
+            # Return current task data
+            return JSONResponse(task_store[task_id])
+            
+        except Exception as e:
+            logger.error(f"Error in API get task status: {str(e)}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+    
+    async def api_list_tasks(request):
+        """
+        HTTP endpoint to list all browser tasks.
+        """
+        try:
+            # Get query parameters
+            status = request.query_params.get("status")
+            limit = int(request.query_params.get("limit", 20))
+            
+            # Filter tasks by status if provided
+            if status:
+                filtered_tasks = {
+                    task_id: task_data 
+                    for task_id, task_data in task_store.items() 
+                    if task_data["status"] == status
+                }
+            else:
+                filtered_tasks = task_store
+            
+            # Sort by creation time (newest first)
+            sorted_tasks = sorted(
+                filtered_tasks.items(),
+                key=lambda x: x[1].get("created_at", ""),
+                reverse=True
+            )
+            
+            # Apply limit
+            limited_tasks = sorted_tasks[:limit]
+            
+            # Convert to list of task data
+            task_list = [task_data for _, task_data in limited_tasks]
+            
+            return JSONResponse({
+                "tasks": task_list,
+                "total": len(filtered_tasks),
+                "limit": limit
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in API list tasks: {str(e)}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+    
+    # Define the API routes
+    return [
+        Route("/api/browser/tasks", endpoint=api_start_browser_task, methods=["POST"]),
+        Route("/api/browser/tasks/{task_id}", endpoint=api_get_task_status, methods=["GET"]),
+        Route("/api/browser/tasks", endpoint=api_list_tasks, methods=["GET"]),
+    ]
+
+
+# UPDATED MAIN FUNCTION WITH DEFAULT VALUES
 def main(
-    port: int,
-    chrome_path: str,
-    window_width: int,
-    window_height: int,
-    locale: str,
-    task_expiry_minutes: int,
+    port: int = 8001,
+    chrome_path: str = None,
+    window_width: int = CONFIG["DEFAULT_WINDOW_WIDTH"],
+    window_height: int = CONFIG["DEFAULT_WINDOW_HEIGHT"],
+    locale: str = CONFIG["DEFAULT_LOCALE"],
+    task_expiry_minutes: int = CONFIG["DEFAULT_TASK_EXPIRY_MINUTES"],
 ) -> int:
     """
     Run the browser-use MCP server.
@@ -654,7 +810,7 @@ def main(
         )
 
     # Initialize LLM
-    llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
 
     # Create MCP server
     app = create_mcp_server(
@@ -668,7 +824,6 @@ def main(
     # Set up SSE transport
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
     import uvicorn
 
     sse = SseServerTransport("/messages/")
@@ -686,11 +841,28 @@ def main(
             logger.error(f"Error in handle_sse: {str(e)}")
             raise
 
+    # Create API routes
+    api_routes = create_api_routes(app)
+
+    # Add CORS middleware
+    middleware = [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # For production, specify the allowed origins
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
+        )
+    ]
+
+    # Create Starlette app with both SSE and API routes
     starlette_app = Starlette(
         debug=True,
+        middleware=middleware,
         routes=[
             Route("/sse", endpoint=handle_sse),
             Mount("/messages/", app=sse.handle_post_message),
+            # Add the API routes
+            *api_routes,
         ],
     )
 
@@ -698,7 +870,7 @@ def main(
     @starlette_app.on_event("startup")
     async def startup_event():
         """Initialize the server on startup."""
-        logger.info("Starting MCP server...")
+        logger.info("Starting MCP server with HTTP API...")
 
         # Sanity checks for critical configuration
         if port <= 0 or port > 65535:
@@ -721,9 +893,3 @@ def main(
 
     # Run uvicorn server
     uvicorn.run(starlette_app, host="0.0.0.0", port=port)
-
-    return 0
-
-
-if __name__ == "__main__":
-    main()

@@ -17,7 +17,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 uv pip install playwright
 uv run playwright install --with-deps --no-shell chromium
-uv run server --port 8000
+uv run server --port 8001
 ```
 
 - the .env requires the following:
