@@ -22,7 +22,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-
+import requests
 # Third-party imports
 import click
 from dotenv import load_dotenv
@@ -104,10 +104,10 @@ async def create_browser_context_for_task(
     Create a fresh browser and context for a task.
 
     This function creates an isolated browser instance and context
-    with proper configuration for a single task.
+    with proper configuration for a single task using Anchor Browser.
 
     Args:
-        chrome_path: Path to Chrome executable
+        chrome_path: Path to Chrome executable (not used with Anchor Browser)
         window_width: Browser window width
         window_height: Browser window height
         locale: Browser locale
@@ -119,14 +119,38 @@ async def create_browser_context_for_task(
         Exception: If browser or context creation fails
     """
     try:
-        # Create browser configuration
-        browser_config = BrowserConfig(
-            extra_chromium_args=CONFIG["BROWSER_ARGS"],
+        # Get Anchor API key from environment variables
+        anchor_api_key = os.environ.get("ANCHOR_API_KEY")
+        if not anchor_api_key:
+            raise ValueError("ANCHOR_API_KEY not found in environment variables")
+            
+        # Create an Anchor browser session
+        response = requests.post(
+            "https://api.anchorbrowser.io/api/sessions",
+            headers={
+                "anchor-api-key": anchor_api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "headless": False,  # Use headless false to view the browser
+            }
         )
-
-        # Set chrome path if provided
-        if chrome_path:
-            browser_config.chrome_instance_path = chrome_path
+        
+        # Check if request was successful
+        response.raise_for_status()
+        session_data = response.json()
+        
+        # Log the session creation
+        logger.info(f"Created Anchor browser session: {session_data['id']}")
+        logger.info(f"Live view URL: {session_data.get('live_view_url', 'N/A')}")
+        
+        # Store the session data for later reference
+        session_id = session_data['id']
+        
+        # Create browser configuration with CDP URL to connect to Anchor browser
+        browser_config = BrowserConfig(
+            cdp_url=f"wss://connect.anchorbrowser.io?apiKey={anchor_api_key}&sessionId={session_id}"
+        )
 
         # Create browser instance
         browser = Browser(config=browser_config)
@@ -145,10 +169,17 @@ async def create_browser_context_for_task(
 
         # Create context with the browser
         context = BrowserContext(browser=browser, config=context_config)
+        
+        # Store the Anchor browser session information in the browser object for later access
+        browser.anchor_session = {
+            "session_id": session_id,
+            "page_id": session_data.get('page_id'),
+            "live_view_url": session_data.get('live_view_url')
+        }
 
         return browser, context
     except Exception as e:
-        logger.error(f"Error creating browser context: {str(e)}")
+        logger.error(f"Error creating Anchor browser context: {str(e)}")
         raise
 
 
@@ -228,16 +259,16 @@ async def run_browser_task_async(
                 }
             )
 
-        # Get Chrome path from environment if available
-        chrome_path = os.environ.get("CHROME_PATH")
-
         # Create a fresh browser and context for this task
         browser, context = await create_browser_context_for_task(
-            chrome_path=chrome_path,
             window_width=window_width,
             window_height=window_height,
             locale=locale,
         )
+        
+        # Store Anchor browser session info in the task store
+        if hasattr(browser, 'anchor_session'):
+            task_store[task_id]["anchor_session"] = browser.anchor_session
 
         # Create agent with the fresh context
         agent = Agent(
@@ -305,6 +336,12 @@ async def run_browser_task_async(
             if context:
                 await context.close()
             if browser:
+                # If using Anchor Browser, we may want to close the session via API
+                if hasattr(browser, 'anchor_session'):
+                    session_id = browser.anchor_session.get('session_id')
+                    if session_id:
+                        # Consider adding code to close Anchor session via API if needed
+                        logger.info(f"Note: Anchor browser session {session_id} may need explicit cleanup via API")
                 await browser.close()
             logger.info(f"Browser resources for task {task_id} cleaned up")
         except Exception as e:
