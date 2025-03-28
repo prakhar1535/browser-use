@@ -259,16 +259,55 @@ async def run_browser_task_async(
                 }
             )
 
-        # Create a fresh browser and context for this task
-        browser, context = await create_browser_context_for_task(
-            window_width=window_width,
-            window_height=window_height,
-            locale=locale,
-        )
+        # Check if we already have an Anchor browser session in the task store
+        existing_anchor_session = task_store[task_id].get("anchor_session")
         
-        # Store Anchor browser session info in the task store
-        if hasattr(browser, 'anchor_session'):
-            task_store[task_id]["anchor_session"] = browser.anchor_session
+        if existing_anchor_session and existing_anchor_session.get("session_id"):
+            # Use the existing Anchor browser session
+            session_id = existing_anchor_session["session_id"]
+            logger.info(f"Using existing Anchor browser session: {session_id}")
+            
+            # Get Anchor API key from environment variables
+            anchor_api_key = os.environ.get("ANCHOR_API_KEY")
+            if not anchor_api_key:
+                raise ValueError("ANCHOR_API_KEY not found in environment variables")
+                
+            # Create browser configuration with CDP URL to connect to existing Anchor browser
+            browser_config = BrowserConfig(
+                cdp_url=f"wss://connect.anchorbrowser.io?apiKey={anchor_api_key}&sessionId={session_id}"
+            )
+
+            # Create browser instance
+            browser = Browser(config=browser_config)
+
+            # Create context configuration
+            context_config = BrowserContextConfig(
+                wait_for_network_idle_page_load_time=0.6,
+                maximum_wait_page_load_time=1.2,
+                minimum_wait_page_load_time=0.2,
+                browser_window_size={"width": window_width, "height": window_height},
+                locale=locale,
+                user_agent=CONFIG["DEFAULT_USER_AGENT"],
+                highlight_elements=True,
+                viewport_expansion=0,
+            )
+
+            # Create context with the browser
+            context = BrowserContext(browser=browser, config=context_config)
+            
+            # Store the Anchor browser session information in the browser object for later access
+            browser.anchor_session = existing_anchor_session
+        else:
+            # Create a fresh browser and context for this task
+            browser, context = await create_browser_context_for_task(
+                window_width=window_width,
+                window_height=window_height,
+                locale=locale,
+            )
+            
+            # Store Anchor browser session info in the task store
+            if hasattr(browser, 'anchor_session'):
+                task_store[task_id]["anchor_session"] = browser.anchor_session
 
         # Create agent with the fresh context
         agent = Agent(
@@ -675,15 +714,6 @@ def create_api_routes(app):
             # Generate task ID
             task_id = str(uuid.uuid4())
             
-            # Initialize task in store
-            task_store[task_id] = {
-                "id": task_id,
-                "status": "pending",
-                "url": body["url"],
-                "action": body["action"],
-                "created_at": datetime.now().isoformat(),
-            }
-            
             # Get custom parameters if provided
             window_width = body.get("window_width", CONFIG["DEFAULT_WINDOW_WIDTH"])
             window_height = body.get("window_height", CONFIG["DEFAULT_WINDOW_HEIGHT"])
@@ -691,6 +721,60 @@ def create_api_routes(app):
             
             # Create LLM instance (or reuse from app)
             llm = ChatOpenAI(model=body.get("model", "gpt-4o"), temperature=body.get("temperature", 0.0))
+            
+            # ENHANCEMENT: Create the Anchor browser session synchronously before returning
+            anchor_session_info = None
+            try:
+                # Get Anchor API key from environment variables
+                anchor_api_key = os.environ.get("ANCHOR_API_KEY")
+                if not anchor_api_key:
+                    raise ValueError("ANCHOR_API_KEY not found in environment variables")
+                    
+                # Create an Anchor browser session
+                response = requests.post(
+                    "https://api.anchorbrowser.io/api/sessions",
+                    headers={
+                        "anchor-api-key": anchor_api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "headless": False,  # Use headless false to view the browser
+                    }
+                )
+                
+                # Check if request was successful
+                response.raise_for_status()
+                session_data = response.json()
+                
+                # Log the session creation
+                logger.info(f"Created Anchor browser session: {session_data['id']}")
+                logger.info(f"Live view URL: {session_data.get('live_view_url', 'N/A')}")
+                
+                # Store the session data for later reference
+                anchor_session_info = {
+                    "session_id": session_data['id'],
+                    "page_id": session_data.get('page_id'),
+                    "live_view_url": session_data.get('live_view_url')
+                }
+            except Exception as e:
+                logger.error(f"Error creating Anchor browser session: {str(e)}")
+                # Continue without Anchor session info - task will try again during execution
+            
+            # Initialize task in store with Anchor session info if available
+            task_info = {
+                "id": task_id,
+                "status": "pending",
+                "url": body["url"],
+                "action": body["action"],
+                "created_at": datetime.now().isoformat()
+            }
+            
+            # Add anchor session info if we have it
+            if anchor_session_info:
+                task_info["anchor_session"] = anchor_session_info
+            
+            # Store task info
+            task_store[task_id] = task_info
             
             # Start task in background
             asyncio.create_task(
@@ -728,16 +812,25 @@ def create_api_routes(app):
                 return JSONResponse({
                     "task_id": task_id,
                     "status": "timeout",
-                    "message": f"Task is still running after {max_wait_seconds} seconds. Use GET /api/browser/tasks/{task_id} to check status later."
+                    "message": f"Task is still running after {max_wait_seconds} seconds. Use GET /api/browser/tasks/{task_id} to check status later.",
+                    "status_url": f"/api/browser/tasks/{task_id}",
+                    "anchor_session": task_store[task_id].get("anchor_session")
                 })
             else:
-                # Return task ID for async workflow
-                return JSONResponse({
+                # Return task ID and Anchor session info for async workflow
+                response_data = {
                     "task_id": task_id,
                     "status": "pending",
                     "message": "Browser task started. Check status at GET /api/browser/tasks/{task_id}",
                     "status_url": f"/api/browser/tasks/{task_id}"
-                })
+                }
+                
+                # Add anchor session info to response if available
+                if "anchor_session" in task_store[task_id]:
+                    response_data["anchor_session"] = task_store[task_id]["anchor_session"]
+                    response_data["live_view_url"] = task_store[task_id]["anchor_session"].get("live_view_url")
+                
+                return JSONResponse(response_data)
             
         except Exception as e:
             logger.error(f"Error in API start task: {str(e)}")
